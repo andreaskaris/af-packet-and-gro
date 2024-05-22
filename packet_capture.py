@@ -66,6 +66,7 @@ def get_mac_addr(mac_raw):
     mac_addr = ':'.join(byte_str)
     return mac_addr
 
+
 def get_ip(addr):
     """
     get_ip  takes a 4 Byte array and formats it to IPv4 representation.
@@ -76,6 +77,7 @@ def get_ip(addr):
     if len(addr) != 4:
         return "0.0.0.0"
     return '.'.join(map(str, addr))
+
 
 def ethernet_head(raw_data):
     """
@@ -120,6 +122,7 @@ def ipv4_head(raw_data):
     header = raw_data[:header_length]
     payload = raw_data[header_length:]
     return version, header_length, ttl, proto, checksum, get_ip(src), get_ip(target), header, payload
+
 
 def gre_head(raw_data):
     """
@@ -216,6 +219,7 @@ def print_protocol(data, previous_header=None, offset="", ethertype=None, intern
     # return header, data, next_ethertype, next_internet_protocol
     return None, None, None, None
 
+
 def calculate_checksum(msg):
     """
     calculate_checksum calculates the TCP checksum for the provided data.
@@ -235,6 +239,7 @@ def calculate_checksum(msg):
     #complement and mask to 4 byte short
     s = ~s & 0xffff
     return socket.htons(s)
+
 
 def tcp_pseudo_header(ip_header, tcp_header, tcp_payload):
     """
@@ -261,6 +266,7 @@ def tcp_pseudo_header(ip_header, tcp_header, tcp_payload):
 #################
 # main
 #################
+
 
 def main() -> int:
     """
