@@ -35,6 +35,8 @@
 # https://dev.to/cwprogram/python-networking-tcp-and-udp-4i3l#tcp-checksum
 
 import socket
+import ctypes
+import array
 import struct
 import sys
 from copy import deepcopy
@@ -44,6 +46,8 @@ from copy import deepcopy
 #################
 
 ETH_P_ALL = 3
+PACKET_AUXDATA = 8
+SOL_PACKET = 263
 TCP = 6
 GRE = 47
 IPv4 = 0x800
@@ -52,6 +56,13 @@ TRANS_ETHER_BRIDGE=0x6558
 GRE_CBIT=0x80
 GRE_KBIT=0x40
 GRE_SBIT=0x20
+
+# TP_STATUS_CSUM_VALID  : This flag indicates that at least the transport
+#                         header checksum of the packet has been already
+#                         validated on the kernel side. If the flag is not set
+#                         then we are free to check the checksum by ourselves
+#                         provided that TP_STATUS_CSUMNOTREADY is also not set.
+TP_STATUS_CSUM_VALID = (1 << 7) # https://www.kernel.org/doc/Documentation/networking/packet_mmap.txt
 
 #################
 # Functions
@@ -283,6 +294,49 @@ def tcp_pseudo_header(ip_header, tcp_header, tcp_payload):
     pseudo_header = struct.pack('!4s4sHH', src, target, socket.IPPROTO_TCP, len(tcp_header) + len(tcp_payload))
     return pseudo_header, header_without_checksum
 
+class tpacket_auxdata(ctypes.Structure):
+    """
+    From https://stackoverflow.com/questions/10947286/how-to-initialize-raw-socket-for-vlan-sniffing
+    """
+    _fields_ = [
+        ("tp_status", ctypes.c_uint),
+        ("tp_len", ctypes.c_uint),
+        ("tp_snaplen", ctypes.c_uint),
+        ("tp_mac", ctypes.c_ushort),
+        ("tp_net", ctypes.c_ushort),
+        ("tp_vlan_tci", ctypes.c_ushort),
+        ("tp_padding", ctypes.c_ushort),
+    ]
+
+def recv_fds(sock, msglen, cmesg_len=4096):
+    """
+    recv_fds receives the socket's payload up to msglen. If the socket is configured with
+    s.setsockopt(SOL_PACKET, PACKET_AUXDATA, 1), it will also receive a flag which is set to
+    the anciliary data's TP_STATUS_CSUM_VALID.
+    TP_STATUS_CSUM_VALID  : This flag indicates that at least the transport
+                        header checksum of the packet has been already
+                        validated on the kernel side. If the flag is not set
+                        then we are free to check the checksum by ourselves
+                        provided that TP_STATUS_CSUMNOTREADY is also not set.
+    Modified from https://docs.python.org/3.9/library/socket.html#socket.socket.recv
+    Modified from https://stackoverflow.com/questions/10947286/how-to-initialize-raw-socket-for-vlan-sniffing
+    
+    :param sock: Socket that data will be retrieved from.
+    :param msglen: Length of data to be retrieved in Bytes.
+    :param cmesg_len: Optional, length of retrieved cmesg, defaults to 4096.
+                            
+    :returns:
+        - msg - raw data from socket.
+        - is_checksum_valid - value of field TP_STATUS_CSUM_VALID.
+    """
+    msg, ancdata, flags, addr = sock.recvmsg(msglen, socket.CMSG_LEN(cmesg_len))
+    for cmsg_level, cmsg_type, cmsg_data in ancdata:
+        if cmsg_level == SOL_PACKET and cmsg_type == PACKET_AUXDATA:
+            auxdata = tpacket_auxdata.from_buffer_copy(cmsg_data)
+    is_checksum_valid = auxdata.tp_status & TP_STATUS_CSUM_VALID > 0
+    return msg, is_checksum_valid
+
+
 #################
 # main
 #################
@@ -311,17 +365,23 @@ def main() -> int:
     intf = sys.argv[1]
 
     s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+    s.setsockopt(SOL_PACKET, PACKET_AUXDATA, 1)
     s.bind((intf, 0))
     while True:
         offset = ""
-        response = s.recv(65565)
+        # response = s.recv(65565) # will not receie aniliary data.
+        response, is_checksum_valid = recv_fds(s, 65565)
         # Ethernet
         header, payload, ethertype, internet_protocol = print_protocol(data=response, ethertype=ETHERNET)
         while ethertype != None or internet_protocol != None:
             offset += "    "
             header, payload, ethertype, internet_protocol = print_protocol(
                     data=payload, previous_header=header, ethertype=ethertype, internet_protocol=internet_protocol, offset=offset)
+        if is_checksum_valid:
+            print("Metadata tells us that any checksum of this packet was prevalidated by the kernel")
+        print("")
     s.close()
 
 if __name__ == '__main__':
     sys.exit(main())
+
