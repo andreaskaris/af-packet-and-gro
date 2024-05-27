@@ -23,8 +23,8 @@
 #
 # This script creates an  AF_PACKET socket on the interface which is specified as its only argument.
 # The purpose is not to write a full packet capture tool. Instead, I wrote it specifically to visualize
-# the stack Ethernet/IPv4/GRE/IPv4/TCP for a problem where I encountered partial checksums for GRO
-# offloaded packets.
+# the stack Ethernet/IPv4/GRE/IPv4/TCP (GRE IP tunnel) respectively Ethernet/IPv4/GRE/Ethernet/IPv4/TCP (GRETAP tunnel)
+# for a problem where I encountered partial checksums for GRO offloaded packets.
 # Usage:
 #     python3 packet_capture.py <interface name>
 # 
@@ -48,6 +48,10 @@ TCP = 6
 GRE = 47
 IPv4 = 0x800
 ETHERNET=0x0
+TRANS_ETHER_BRIDGE=0x6558
+GRE_CBIT=0x80
+GRE_KBIT=0x40
+GRE_SBIT=0x20
 
 #################
 # Functions
@@ -134,9 +138,25 @@ def gre_head(raw_data):
         - header - GRE header
         - payload - GRE payload
     """
-    header = raw_data[:4]
-    payload = raw_data[4:]
-    prototype, = struct.unpack('! 2x H', header)
+    cbit_set = (raw_data[0] & GRE_CBIT) > 0
+    kbit_set = (raw_data[0] & GRE_KBIT) > 0
+    sbit_set = (raw_data[0] & GRE_SBIT) > 0
+
+    unpack = '! 2x H'
+    offset = 4
+    if cbit_set:
+        offset += 4
+        unpack += ' 4x'
+    if kbit_set:
+        offset += 4
+        unpack += ' 4x'
+    if sbit_set:
+        offset += 4
+        unpack += ' 4x'
+
+    header = raw_data[:offset]
+    payload = raw_data[offset:]
+    prototype, = struct.unpack(unpack, header)
     return prototype, header, payload
 
 
@@ -194,7 +214,7 @@ def print_protocol(data, previous_header=None, offset="", ethertype=None, intern
         - next_internet_protocol - The Internet Protocol number of the next layer of the TCP/IP stack
     """
     # Ethernet
-    if ethertype == ETHERNET:
+    if ethertype == ETHERNET or ethertype == TRANS_ETHER_BRIDGE:
         dest_mac, src_mac, next_ethertype, header, data = ethernet_head(data)
         print(f'{offset}{src_mac} -> {dest_mac}, ethertype: {hex(next_ethertype)}, len: {len(data)}')
         return header, data, next_ethertype, None
